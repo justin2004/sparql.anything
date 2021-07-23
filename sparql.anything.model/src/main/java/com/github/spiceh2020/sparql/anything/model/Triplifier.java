@@ -117,10 +117,18 @@ public interface Triplifier {
 
 	public static InputStream getInputStream(URL url, Properties properties, Charset charset)
 			throws IOException, ArchiveException {
-			URLConnection con = url.openConnection();
-			con.setRequestProperty("SomeHeader","HeaderValue");
-		if (!properties.containsKey(IRIArgument.FROM_ARCHIVE.toString()))
+		if (!properties.containsKey(IRIArgument.FROM_ARCHIVE.toString())){
+			URLConnection con = url.openConnection(); // TODO need to close the connection?
+			// TODO decide how to flag certain keys as http headers.
+			//      in the mean time, just treat all key value pairs as http headers because it 
+			//      likely doesn't hurt as the server will just ignore ones it doesn't care about.
+			//      this actually has the benefit that you can override headers (e.g. User-Agent).
+			for(String key : properties.stringPropertyNames()){
+				con.setRequestProperty(key,properties.getProperty(key));
+			}
 			return con.getInputStream();
+		}
+		// TODO need to handle passing http headers to this archive version?
 		URL urlArchive = instantiateURL(properties.getProperty(IRIArgument.FROM_ARCHIVE.toString()));
 		return ResourceManager.getInstance().getInputStreamFromArchive(urlArchive,
 				properties.getProperty(IRIArgument.LOCATION.toString()), charset);
