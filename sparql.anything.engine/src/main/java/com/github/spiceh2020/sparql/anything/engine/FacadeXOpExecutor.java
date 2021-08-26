@@ -1,6 +1,8 @@
 package com.github.spiceh2020.sparql.anything.engine;
 
 import java.io.File;
+import java.io.FileReader;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
@@ -11,6 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+import org.apache.jena.query.QueryFactory;
+import org.apache.jena.sparql.engine.iterator.QueryIterRoot;
+import org.apache.jena.sparql.algebra.Algebra;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.jena.graph.Node;
 import org.apache.jena.graph.NodeFactory;
@@ -53,6 +58,8 @@ import com.github.spiceh2020.sparql.anything.model.Triplifier;
 import com.github.spiceh2020.sparql.anything.zip.FolderTriplifier;
 
 public class FacadeXOpExecutor extends OpExecutor {
+
+	public final static String PROPERTY_QUERY_LOCATION = "query.location";
 
 	private TriplifierRegister triplifierRegister;
 
@@ -124,6 +131,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 
 		if (t == null) {
 			logger.trace("No triplifier");
+			// then look for a fx:query.location
 			return DatasetGraphFactory.create();
 		}
 
@@ -152,13 +160,35 @@ public class FacadeXOpExecutor extends OpExecutor {
 	}
 
 	protected QueryIterator execute(final OpService opService, QueryIterator input) {
-		logger.trace("SERVICE uri: {} {}", opService.getService(), opService.toString());
+		logger.info("SERVICE uri: {} {}", opService.getService(), opService.toString());
 		if (opService.getService().isVariable())
 			return postponeService(opService, input);
 		if (opService.getService().isURI() && isFacadeXURI(opService.getService().getURI())) {
-			logger.trace("Facade-X uri: {}", opService.getService());
+			logger.info("Facade-X uri: {}", opService.getService());
 			try {
 				Properties p = getProperties(opService.getService().getURI(), opService);
+				if(p.containsKey(PROPERTY_QUERY_LOCATION)){
+					String queryUrl = p.getProperty(PROPERTY_QUERY_LOCATION) ;
+					File queryFile = new File(queryUrl);
+					BufferedReader br = new BufferedReader(new FileReader(queryFile));
+					StringBuilder sb = new StringBuilder();
+					String line;
+					while ((line = br.readLine()) != null) {
+						sb.append(line);
+						sb.append('\n');
+					}
+					String query = sb.toString();
+					br.close();
+					OpService referencedOp = (OpService) Algebra.compile(QueryFactory.create(query)); // TODO cast ok?
+					// opService = referencedOp; // TODO assumes referencedOp is a service?
+					((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#query"), query); // TODO the cast ok?
+					((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#algebra"), referencedOp.getSubOp()); // TODO the cast ok?
+					logger.info(referencedOp.toString());
+					return execute(referencedOp, input);
+// (def query (org.apache.jena.query.QueryFactory/create "select * where {service <x-sparql-anything:>{?s ?p ?o}}"))
+// (org.apache.jena.sparql.algebra.Algebra/compile query)
+					// TODO use the query!
+				}
 				DatasetGraph dg = getDatasetGraph(p, opService.getSubOp());
 				return QC.execute(opService.getSubOp(), input,
 						new ExecutionContext(execCxt.getContext(), dg.getDefaultGraph(), dg, execCxt.getExecutor()));
@@ -392,12 +422,12 @@ public class FacadeXOpExecutor extends OpExecutor {
 	}
 
 	protected QueryIterator execute(final OpBGP opBGP, QueryIterator input) {
-		logger.trace("executing  BGP {}", opBGP.toString());
-		logger.trace("Size: {} {}", this.execCxt.getDataset().size(),
+		logger.info("executing  BGP {}", opBGP.toString());
+		logger.info("Size: {} {}", this.execCxt.getDataset().size(),
 				this.execCxt.getDataset().getDefaultGraph().size());
 
 		List<Triple> l = getPropFuncTriples(opBGP.getPattern());
-		logger.trace("Triples with OpFunc: {}", l.size());
+		logger.info("Triples with OpFunc: {}", l.size());
 		QueryIterator input2 = input;
 		for (Triple t : l) {
 			input2 = QC.execute(getOpPropFuncAnySlot(t), input2, execCxt);
@@ -408,7 +438,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 			extractPropertiesFromOpGraph(p, opBGP);
 			if (p.size() > 0) {
 				// if we have FX properties we at least need to excludeFXProperties()
-				logger.trace("BGP Properties {}", p.toString());
+				logger.info("BGP Properties {}", p.toString());
 				DatasetGraph dg;
 				if (this.execCxt.getDataset().isEmpty()){
 					// we only need to call getDatasetGraph() if we have an empty one
