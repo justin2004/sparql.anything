@@ -148,7 +148,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 				executedFacadeXIris.put(getInMemoryCacheKey(p, op), dg);
 				logger.debug("Graph added to in-memory cache");
 			}
-			logger.trace("Triplified, #triples in default graph {}", dg.getDefaultGraph().size());
+			logger.info("Triplified, #triples in default graph {}", dg.getDefaultGraph().size());
 		} else {
 			logger.trace("No location, use content: {}", p.getProperty(IRIArgument.CONTENT.toString()));
 			dg = t.triplify(p);
@@ -160,6 +160,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 	}
 
 	protected QueryIterator execute(final OpService opService, QueryIterator input) {
+		DatasetGraph dg ;
 		logger.info("SERVICE uri: {} {}", opService.getService(), opService.toString());
 		if (opService.getService().isVariable())
 			return postponeService(opService, input);
@@ -181,17 +182,22 @@ public class FacadeXOpExecutor extends OpExecutor {
 					br.close();
 					OpService referencedOp = (OpService) Algebra.compile(QueryFactory.create(query)); // TODO cast ok?
 					// opService = referencedOp; // TODO assumes referencedOp is a service?
-					((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#query"), query); // TODO the cast ok?
-					((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#algebra"), referencedOp.getSubOp()); // TODO the cast ok?
+					// ((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#query"), query); // TODO the cast ok?
+					// ((QueryIterRoot)input).getExecContext().getContext().set(org.apache.jena.sparql.util.Symbol.create("http://jena.apache.org/ARQ/system#algebra"), referencedOp.getSubOp()); // TODO the cast ok?
 					logger.info(referencedOp.toString());
-					return execute(referencedOp, input);
-// (def query (org.apache.jena.query.QueryFactory/create "select * where {service <x-sparql-anything:>{?s ?p ?o}}"))
-// (org.apache.jena.sparql.algebra.Algebra/compile query)
-					// TODO use the query!
+					//     NEW THING
+					Properties pReferenced = getProperties(referencedOp.getService().getURI(), referencedOp);
+					DatasetGraph dgReferenced = getDatasetGraph(pReferenced, referencedOp.getSubOp());
+					dg = dgReferenced ;
+					this.execCxt = new ExecutionContext(execCxt.getContext(), dg.getDefaultGraph(), dg, execCxt.getExecutor()) ;
+					// this.execCxt = new ExecutionContext(dg) ;
+					return input ;
+					// return execute(referencedOp, input);
+				} else {
+					dg = getDatasetGraph(p, opService.getSubOp());
+					return QC.execute(opService.getSubOp(), input,
+							new ExecutionContext(execCxt.getContext(), dg.getDefaultGraph(), dg, execCxt.getExecutor()));
 				}
-				DatasetGraph dg = getDatasetGraph(p, opService.getSubOp());
-				return QC.execute(opService.getSubOp(), input,
-						new ExecutionContext(execCxt.getContext(), dg.getDefaultGraph(), dg, execCxt.getExecutor()));
 			} catch (IllegalArgumentException | SecurityException | IOException | InstantiationException
 					| IllegalAccessException | InvocationTargetException | NoSuchMethodException
 					| ClassNotFoundException e) {
@@ -199,7 +205,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 				throw new RuntimeException(e);
 			} catch (UnboundVariableException e) {
 				// Proceed with the next operation
-//				logger.trace("Unbound variables, BGP {}", e.getOpBGP().toString());
+				//				logger.trace("Unbound variables, BGP {}", e.getOpBGP().toString());
 				OpBGP fakeBGP = extractFakePattern(e.getOpBGP());
 				logger.trace("Executing fake pattern {}", fakeBGP);
 				return postponeService(opService, QC.execute(fakeBGP, input, execCxt));
@@ -294,49 +300,49 @@ public class FacadeXOpExecutor extends OpExecutor {
 
 	private Triplifier getTriplifier(Properties p) throws InstantiationException, IllegalAccessException,
 			InvocationTargetException, NoSuchMethodException, ClassNotFoundException {
-		Triplifier t;
-		String urlLocation = p.getProperty(IRIArgument.LOCATION.toString());
-		if (!p.containsKey(IRIArgument.LOCATION.toString()) && !p.containsKey(IRIArgument.CONTENT.toString())) {
-			logger.error("Neither location nor content provided");
-//			throw new RuntimeException("Neither location nor content provided");
-			return null;
-		}
+				Triplifier t;
+				String urlLocation = p.getProperty(IRIArgument.LOCATION.toString());
+				if (!p.containsKey(IRIArgument.LOCATION.toString()) && !p.containsKey(IRIArgument.CONTENT.toString())) {
+					logger.error("Neither location nor content provided");
+					//			throw new RuntimeException("Neither location nor content provided");
+					return null;
+				}
 
-		if (p.containsKey(IRIArgument.TRIPLIFIER.toString())) {
-			logger.trace("Triplifier enforced");
-			t = (Triplifier) Class.forName(p.getProperty(IRIArgument.TRIPLIFIER.toString())).getConstructor()
-					.newInstance();
-		} else if (p.containsKey(IRIArgument.MEDIA_TYPE.toString())) {
-			logger.trace("MimeType enforced");
-			t = (Triplifier) Class
-					.forName(triplifierRegister
-							.getTriplifierForMimeType(p.getProperty(IRIArgument.MEDIA_TYPE.toString())))
-					.getConstructor().newInstance();
-		} else if (p.containsKey(IRIArgument.LOCATION.toString())) {
+				if (p.containsKey(IRIArgument.TRIPLIFIER.toString())) {
+					logger.trace("Triplifier enforced");
+					t = (Triplifier) Class.forName(p.getProperty(IRIArgument.TRIPLIFIER.toString())).getConstructor()
+						.newInstance();
+				} else if (p.containsKey(IRIArgument.MEDIA_TYPE.toString())) {
+					logger.trace("MimeType enforced");
+					t = (Triplifier) Class
+						.forName(triplifierRegister
+								.getTriplifierForMimeType(p.getProperty(IRIArgument.MEDIA_TYPE.toString())))
+						.getConstructor().newInstance();
+				} else if (p.containsKey(IRIArgument.LOCATION.toString())) {
 
-			File f = new File(p.get(IRIArgument.LOCATION.toString()).toString().replace("file://", ""));
+					File f = new File(p.get(IRIArgument.LOCATION.toString()).toString().replace("file://", ""));
 
-			logger.trace("Use location {}, exists on local FS? {}, is directory? {}", f.getAbsolutePath(), f.exists(),
-					f.isDirectory());
+					logger.trace("Use location {}, exists on local FS? {}, is directory? {}", f.getAbsolutePath(), f.exists(),
+							f.isDirectory());
 
-			if (f.exists() && f.isDirectory()) {
-				logger.trace("Return folder triplifier");
-				t = new FolderTriplifier();
-			} else if (IsFacadeXExtension.isFacadeXExtension(p.get(IRIArgument.LOCATION.toString()).toString())) {
-				logger.trace("Guessing triplifier using file extension ");
-				String tt = triplifierRegister.getTriplifierForExtension(FilenameUtils.getExtension(urlLocation));
-				logger.trace("Guessed extension: {} :: {} ", FilenameUtils.getExtension(urlLocation), tt);
-				t = (Triplifier) Class.forName(tt).getConstructor().newInstance();
-			} else {
-				return null;
-			}
+					if (f.exists() && f.isDirectory()) {
+						logger.trace("Return folder triplifier");
+						t = new FolderTriplifier();
+					} else if (IsFacadeXExtension.isFacadeXExtension(p.get(IRIArgument.LOCATION.toString()).toString())) {
+						logger.trace("Guessing triplifier using file extension ");
+						String tt = triplifierRegister.getTriplifierForExtension(FilenameUtils.getExtension(urlLocation));
+						logger.trace("Guessed extension: {} :: {} ", FilenameUtils.getExtension(urlLocation), tt);
+						t = (Triplifier) Class.forName(tt).getConstructor().newInstance();
+					} else {
+						return null;
+					}
 
-		} else {
-			logger.trace("No location provided, using the Text triplifier");
-			t = (Triplifier) Class.forName("com.github.spiceh2020.sparql.anything.text.TextTriplifier").getConstructor()
-					.newInstance();
-		}
-		return t;
+				} else {
+					logger.trace("No location provided, using the Text triplifier");
+					t = (Triplifier) Class.forName("com.github.spiceh2020.sparql.anything.text.TextTriplifier").getConstructor()
+						.newInstance();
+				}
+				return t;
 	}
 
 	private Properties getProperties(String url, OpService opService) throws UnboundVariableException {
@@ -457,7 +463,7 @@ public class FacadeXOpExecutor extends OpExecutor {
 		} catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException
 				| ClassNotFoundException | IOException e) {
 			logger.error(e.getMessage());
-		}
+				}
 		logger.trace("Execute default");
 		return super.execute(excludeOpPropFunction(opBGP), input2);
 	}
